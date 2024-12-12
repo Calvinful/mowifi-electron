@@ -5,7 +5,6 @@ interface StoreAPI {
   get: (key: string) => Promise<ValidStoreValue>
   set: (key: string, value: ValidStoreValue) => Promise<void>
 }
-
 interface API {
   ping: () => void
 }

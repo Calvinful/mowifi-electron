@@ -15,8 +15,10 @@ const Settings = (): JSX.Element => {
     notifications: true,
     autoLaunch: false
   })
-
+  //const ipcHandle = (): void => window.api.ping()
+  const ipcHandle = (): Promise<SettingsState> => window.store.get('theme')
   useEffect(() => {
+
     const loadSettings = async (): Promise<void> => {
       const theme = (await window['store'].get('theme')) as string
       const notifications = (await window['store'].get('notifications')) as boolean
