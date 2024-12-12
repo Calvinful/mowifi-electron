@@ -1,13 +1,29 @@
 import Versions from './components/Versions'
 import electronLogo from './assets/electron.svg'
 import NavBar from './components/NavBar'
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
+import Home from './components/Home';
+import Applications from './components/Applications';
+import Providers from './components/Providers';
+import Logs from './components/Logs';
+import Settings from './components/Settings';
 function App(): JSX.Element {
   const ipcHandle = (): void => window.api.ping()
 
   return (
     <>
       <NavBar />
+      <BrowserRouter>
+      <NavBar />
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/Applications" element={<Applications />} />
+        <Route path="/Providers" element={<Providers />} />
+        <Route path="/Logs" element={<Logs />} />
+        <Route path="/Settings" element={<Settings />} />
+      </Routes>
+    </BrowserRouter>
       <main className="pt-16">
         <div className="flex flex-col items-center justify-center min-h-screen">
           <img alt="logo" className="logo" src={electronLogo} />

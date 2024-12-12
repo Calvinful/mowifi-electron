@@ -13,10 +13,10 @@ contextBridge.exposeInMainWorld('store', {
 contextBridge.exposeInMainWorld('api', {
   ping: () => ipcRenderer.send('ping')
 })
+  */
 interface API {
   ping: () => void
 }
-*/
 
 type ValidStoreValue = string | number | boolean | null | undefined | object | Array<ValidStoreValue>
 

@@ -24,9 +24,12 @@ const Settings = (): JSX.Element => {
     loadSettings()
   }, [])
 
-  const handleSettingChange = async (key: keyof SettingsState, value: string | boolean): Promise<void> => {
+  const handleSettingChange = async (
+    key: keyof SettingsState,
+    value: string | boolean
+  ): Promise<void> => {
     await window.store.set(key, value)
-    setSettings(prev => ({ ...prev, [key]: value }))
+    setSettings((prev) => ({ ...prev, [key]: value }))
   }
 
   return (
