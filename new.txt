@@ -1,0 +1,890 @@
+----properties-----
+import { resolve } from 'path'
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  main: {
+    plugins: [externalizeDepsPlugin()]
+  },
+  preload: {
+    plugins: [externalizeDepsPlugin()]
+  },
+  renderer: {
+    resolve: {
+      alias: {
+        '@renderer': resolve('src/renderer/src')
+      }
+    },
+    plugins: [react()]
+  }
+})
+
+----------project files-----------
+
+src//renderer/src/env.d.ts
+--------------------------------
+/// <reference types="vite/client" />
+\n
+--------------------------------
+src//main/index.ts
+--------------------------------
+import {
+  app,
+  shell,
+  BrowserWindow,
+  ipcMain,
+  Menu,
+  dialog,
+  MenuItemConstructorOptions
+} from 'electron'
+//import { ValidStoreValue } from '../preload/index'
+import { store } from './store'
+import { join } from 'path'
+import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import icon from '../../resources/icon.png?asset'
+import { spawn } from 'child_process'
+function createWindow(): void {
+  const mainWindow = new BrowserWindow({
+    width: 900,
+    height: 670,
+    show: false,
+    autoHideMenuBar: false, // We set this to false so the menu bar is visible.
+    ...(process.platform === 'linux' ? { icon } : {}),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false
+    }
+  })
+
+  mainWindow.on('ready-to-show', () => {
+    mainWindow.show()
+  })
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  // Load the remote URL for development or the local html file for production.
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+// Create a menu with a "File" menu and "Edit" menu
+function createMenu(): void {
+  const isMac = process.platform === 'darwin'
+
+  const template: MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'Run JAR File…',
+          click: async (): Promise<void> => {
+            // Show a file open dialog to select the JAR
+            const { canceled, filePaths } = await dialog.showOpenDialog({
+              filters: [{ name: 'Java Archive', extensions: ['jar'] }],
+              properties: ['openFile']
+            })
+
+            if (!canceled && filePaths && filePaths[0]) {
+              const jarPath = filePaths[0]
+              runJarFile(jarPath)
+            }
+          }
+        },
+        isMac ? { role: 'close' as const } : { role: 'quit' as const }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    }
+  ]
+
+  const menu = Menu.buildFromTemplate(template)
+  Menu.setApplicationMenu(menu)
+}
+
+// Function to run a JAR file using `java -jar` command
+function runJarFile(filePath: string): void {
+  // Spawn a child process to run the jar. Ensure `java` is on the PATH.
+  const child = spawn('java', ['-jar', filePath], {
+    cwd: app.getPath('home'),
+    shell: false
+  })
+
+  // Listen to standard output
+  child.stdout.on('data', (data) => {
+    console.log(`JAR stdout: ${data}`)
+    // Optionally, send data back to renderer via IPC if needed.
+    // Example: mainWindow?.webContents.send('jar-output', data.toString())
+  })
+
+  // Listen to standard error
+  child.stderr.on('data', (data) => {
+    console.error(`JAR stderr: ${data}`)
+  })
+
+  child.on('close', (code) => {
+    console.log(`JAR process exited with code ${code}`)
+    // Again, could send IPC message if needed.
+  })
+
+  child.on('error', (error) => {
+    console.error(`Failed to start JAR: ${error}`)
+  })
+}
+app.whenReady().then(() => {
+  electronApp.setAppUserModelId('com.electron')
+
+  app.on('browser-window-created', (_, window) => {
+    optimizer.watchWindowShortcuts(window)
+  })
+  ipcMain.handle('store:get', (_event, key: string) => {
+    return store.get(key)
+  })
+
+  ipcMain.handle('store:set', (_event, key:string, value: unknown) => {
+    store.set(key, value)
+    return undefined
+  })
+
+  // IPC test
+  ipcMain.on('ping', () => console.log('pong'))
+
+  // Create the menu before or after creating the window is fine, but generally before showing the window is good.
+  createMenu()
+  createWindow()
+  
+  app.on('activate', function () {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
+\n
+--------------------------------
+src//main/store.ts
+--------------------------------
+import Store from 'electron-store'
+
+export const store = new Store({
+  defaults: {
+    theme: 'dark',
+    notifications: true,
+    autoLaunch: false,
+    // Add more default settings as needed
+  }
+})\n
+--------------------------------
+src//preload/index.ts
+--------------------------------
+import { contextBridge } from 'electron'
+import { electronAPI } from '@electron-toolkit/preload'
+
+type ValidStoreValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | object
+  | Array<ValidStoreValue>
+
+const api = {}
+interface StoreAPI {
+  get: (key: string) => Promise<ValidStoreValue>
+  set: (key: string, value: ValidStoreValue) => Promise<void>
+}
+
+// Create our store API
+const storeAPI: StoreAPI = {
+  get: async (key: string) => {
+    return await Electron.ipcRenderer.invoke('store:get', key)
+  },
+  set: async (key: string, value: ValidStoreValue) => {
+    await Electron.ipcRenderer.invoke('store:set', key, value)
+  }
+}
+
+if (process.contextIsolated) {
+  try {
+    contextBridge.exposeInMainWorld('electron', electronAPI)
+    contextBridge.exposeInMainWorld('store', storeAPI)
+    contextBridge.exposeInMainWorld('api', api)
+  } catch (error) {
+    console.error(error)
+  }
+} else {
+  // @ts-ignore (define in dts)
+  window.electron = electronAPI
+
+  // @ts-ignore (define in dts)
+  window.store = storeAPI
+
+  // @ts-ignore (define in dts)
+  window.api = api
+}
+export { type ValidStoreValue }
+\n
+--------------------------------
+src//preload/index.d.ts
+--------------------------------
+import { ElectronAPI } from '@electron-toolkit/preload'
+
+type ValidStoreValue = string | number | boolean | null | undefined | object | Array<ValidStoreValue>
+
+declare global {
+  interface Window {
+    electron: ElectronAPI
+    store: {
+      get: (key: string) => Promise<ValidStoreValue>
+      set: (key: string, value: ValidStoreValue) => Promise<void>
+    }
+    api: unknown
+  }
+}
+
+\n
+--------------------------------
+src//renderer/src/App.tsx
+--------------------------------
+import Versions from './components/Versions'
+import electronLogo from './assets/electron.svg'
+import NavBar from './components/NavBar'
+
+function App(): JSX.Element {
+  const ipcHandle = (): void => window.electron.ipcRenderer.send('ping')
+
+  return (
+    <>
+      <NavBar />
+      <main className="pt-16">
+        {' '}
+        {/* Add padding-top to account for fixed navbar */}
+        <div className="flex flex-col items-center justify-center min-h-screen">
+          <img alt="logo" className="logo" src={electronLogo} />
+          <div className="creator">Powered by electron-vite</div>
+          <div className="text">
+            Build an Electron app with <span className="react">React</span>
+            &nbsp;and <span className="ts">TypeScript</span>
+          </div>
+          <p className="tip">
+            Please try pressing <code>F12</code> to open the devTool
+          </p>
+          <div className="actions">
+            <div className="action">
+              <a href="https://electron-vite.org/" target="_blank" rel="noreferrer">
+                Documentation
+              </a>
+            </div>
+            <div className="action">
+              <a target="_blank" rel="noreferrer" onClick={ipcHandle}>
+                Send IPC
+              </a>
+            </div>
+          </div>
+          <Versions></Versions>
+        </div>
+      </main>
+    </>
+  )
+}
+
+export default App
+--------------------------------
+src//renderer/src/main.tsx
+--------------------------------
+import './assets/main.css'
+
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+
+ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+)
+--------------------------------
+src//renderer/src/components/Settings.tsx
+--------------------------------
+import { useEffect, useState } from 'react'
+//import { Switch } from '@/components/ui/switch'
+import { Switch } from '@radix-ui/react-switch'
+
+interface SettingsState {
+  theme: string
+  notifications: boolean 
+  autoLaunch: boolean
+}
+
+const Settings = (): JSX.Element => {
+  const [settings, setSettings] = useState<SettingsState>({
+    theme: 'dark',
+    notifications: true,
+    autoLaunch: false
+  })
+  useEffect(() => {
+    // Load settings when component mounts
+    const loadSettings = async (): Promise<void> => {
+      const theme = await window.store.get('theme') as string
+      const notifications = await window.store.get('notifications') as boolean
+      const autoLaunch = await window.store.get('autoLaunch') as boolean
+      setSettings({ theme, notifications, autoLaunch })
+    }
+    loadSettings()
+  }, [])
+
+
+  const handleSettingChange = async (key: keyof SettingsState, value: string | boolean): Promise<void> => {
+    await window.store.set(key, value)
+    setSettings(prev => ({ ...prev, [key]: value }))
+  }
+
+  return (
+    <div className="p-6 max-w-2xl mx-auto">
+      <h1 className="text-2xl font-bold mb-6">Settings</h1>
+      
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-medium">Theme</h3>
+            <p className="text-sm text-gray-500">Choose your preferred theme</p>
+          </div>
+          <select
+            value={settings.theme}
+            onChange={(e) => handleSettingChange('theme', e.target.value)}
+            className="bg-gray-700 rounded-md p-2"
+          >
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-medium">Notifications</h3>
+            <p className="text-sm text-gray-500">Enable or disable notifications</p>
+          </div>
+          <Switch
+            checked={settings.notifications}
+            onCheckedChange={(checked) => handleSettingChange('notifications', checked)}
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-medium">Auto Launch</h3>
+            <p className="text-sm text-gray-500">Start app when system boots</p>
+          </div>
+          <Switch
+            checked={settings.autoLaunch}
+            onCheckedChange={(checked) => handleSettingChange('autoLaunch', checked)}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default Settings--------------------------------
+src//renderer/src/components/NavBar.tsx
+--------------------------------
+//import React, { JSXElementConstructor } from 'react'
+
+const NavBar = (): JSX.Element => {
+  return (
+    <nav className="fixed top-0 left-0 right-0 bg-gray-900 shadow-lg z-50">
+      <div className="max-w-7xl mx-auto px-4">
+        <div className="flex items-center justify-between h-16">
+          {/* Logo/Brand section */}
+          <div className="flex items-center">
+            <span className="text-white font-semibold text-lg">MyElectronApp</span>
+          </div>
+
+          {/* Navigation Links */}
+          <div className="flex space-x-4">
+            <NavLink href="#" active>
+              Home
+            </NavLink>
+            <NavLink href="#">Features</NavLink>
+            <NavLink href="#">Settings</NavLink>
+            <NavLink href="#">About</NavLink>
+          </div>
+        </div>
+      </div>
+    </nav>
+  )
+}
+
+type Props = {
+  href: string
+  children: React.ReactNode
+  active?: boolean
+}
+const NavLink = ({ href, children, active = false }: Props): JSX.Element => {
+  const baseClasses =
+    'px-3 py-2 rounded-md text-sm font-medium transition-colors duration-150 ease-in-out'
+  const activeClasses = 'bg-gray-700 text-white'
+  const inactiveClasses = 'text-gray-300 hover:bg-gray-700 hover:text-white'
+
+  return (
+    <a href={href} className={`${baseClasses} ${active ? activeClasses : inactiveClasses}`}>
+      {children}
+    </a>
+  )
+}
+
+export default NavBar
+--------------------------------
+src//renderer/src/components/Versions.tsx
+--------------------------------
+import { useState } from 'react'
+
+function Versions(): JSX.Element {
+  const [versions] = useState(window.electron.process.versions)
+
+  return (
+    <ul className="versions">
+      <li className="electron-version">Electron v{versions.electron}</li>
+      <li className="chrome-version">Chromium v{versions.chrome}</li>
+      <li className="node-version">Node v{versions.node}</li>
+    </ul>
+  )
+}
+
+export default Versions
+--------------------------------
+src//renderer/src/assets/main.css
+--------------------------------
+@import './base.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background-image: url('./wavy-lines.svg');
+  background-size: cover;
+  user-select: none;
+}
+
+code {
+  font-weight: 600;
+  padding: 3px 5px;
+  border-radius: 2px;
+  background-color: var(--color-background-mute);
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    SF Mono,
+    Menlo,
+    Consolas,
+    Liberation Mono,
+    monospace;
+  font-size: 85%;
+}
+
+#root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  margin-bottom: 80px;
+}
+
+.logo {
+  margin-bottom: 20px;
+  -webkit-user-drag: none;
+  height: 128px;
+  width: 128px;
+  will-change: filter;
+  transition: filter 300ms;
+}
+
+.logo:hover {
+  filter: drop-shadow(0 0 1.2em #6988e6aa);
+}
+
+.creator {
+  font-size: 14px;
+  line-height: 16px;
+  color: var(--ev-c-text-2);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.text {
+  font-size: 28px;
+  color: var(--ev-c-text-1);
+  font-weight: 700;
+  line-height: 32px;
+  text-align: center;
+  margin: 0 10px;
+  padding: 16px 0;
+}
+
+.tip {
+  font-size: 16px;
+  line-height: 24px;
+  color: var(--ev-c-text-2);
+  font-weight: 600;
+}
+
+.react {
+  background: -webkit-linear-gradient(315deg, #087ea4 55%, #7c93ee);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 700;
+}
+
+.ts {
+  background: -webkit-linear-gradient(315deg, #3178c6 45%, #f0dc4e);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  padding-top: 32px;
+  margin: -6px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.action {
+  flex-shrink: 0;
+  padding: 6px;
+}
+
+.action a {
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+  border: 1px solid transparent;
+  text-align: center;
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 20px;
+  padding: 0 20px;
+  line-height: 38px;
+  font-size: 14px;
+  border-color: var(--ev-button-alt-border);
+  color: var(--ev-button-alt-text);
+  background-color: var(--ev-button-alt-bg);
+}
+
+.action a:hover {
+  border-color: var(--ev-button-alt-hover-border);
+  color: var(--ev-button-alt-hover-text);
+  background-color: var(--ev-button-alt-hover-bg);
+}
+
+.versions {
+  position: absolute;
+  bottom: 30px;
+  margin: 0 auto;
+  padding: 15px 0;
+  font-family: 'Menlo', 'Lucida Console', monospace;
+  display: inline-flex;
+  overflow: hidden;
+  align-items: center;
+  border-radius: 22px;
+  background-color: #202127;
+  backdrop-filter: blur(24px);
+}
+
+.versions li {
+  display: block;
+  float: left;
+  border-right: 1px solid var(--ev-c-gray-1);
+  padding: 0 20px;
+  font-size: 14px;
+  line-height: 14px;
+  opacity: 0.8;
+  &:last-child {
+    border: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .text {
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 620px) {
+  .versions {
+    display: none;
+  }
+}
+
+@media (max-width: 350px) {
+  .tip,
+  .actions {
+    display: none;
+  }
+}
+--------------------------------
+src//renderer/src/assets/base.css
+--------------------------------
+:root {
+  --ev-c-white: #ffffff;
+  --ev-c-white-soft: #f8f8f8;
+  --ev-c-white-mute: #f2f2f2;
+
+  --ev-c-black: #1b1b1f;
+  --ev-c-black-soft: #222222;
+  --ev-c-black-mute: #282828;
+
+  --ev-c-gray-1: #515c67;
+  --ev-c-gray-2: #414853;
+  --ev-c-gray-3: #32363f;
+
+  --ev-c-text-1: rgba(255, 255, 245, 0.86);
+  --ev-c-text-2: rgba(235, 235, 245, 0.6);
+  --ev-c-text-3: rgba(235, 235, 245, 0.38);
+
+  --ev-button-alt-border: transparent;
+  --ev-button-alt-text: var(--ev-c-text-1);
+  --ev-button-alt-bg: var(--ev-c-gray-3);
+  --ev-button-alt-hover-border: transparent;
+  --ev-button-alt-hover-text: var(--ev-c-text-1);
+  --ev-button-alt-hover-bg: var(--ev-c-gray-2);
+}
+
+:root {
+  --color-background: var(--ev-c-black);
+  --color-background-soft: var(--ev-c-black-soft);
+  --color-background-mute: var(--ev-c-black-mute);
+
+  --color-text: var(--ev-c-text-1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}
+
+ul {
+  list-style: none;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--color-text);
+  background: var(--color-background);
+  line-height: 1.6;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    'Fira Sans',
+    'Droid Sans',
+    'Helvetica Neue',
+    sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+--------------------------------
+./tsconfig.node.json
+--------------------------------
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": ["electron.vite.config.*", "src/main/**/*", "src/preload/**/*"],
+  "compilerOptions": {
+    "composite": true,
+    "types": ["electron-vite/node"]
+  }
+}
+--------------------------------
+./tsconfig.web.json
+--------------------------------
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
+  "include": [
+  "src/renderer/src/env.d.ts",
+    "src/renderer/src/**/*",
+    "src/renderer/src/**/*.tsx",
+    "src/preload/*.d.ts",
+    "src/preload/index.ts",
+ 
+  ],
+  "compilerOptions": {
+    "composite": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"],
+      "@renderer/*": [
+        "src/renderer/src/*"
+      ]
+    }
+  }
+}
+--------------------------------
+./package.json
+--------------------------------
+{
+  "name": "mowiv5",
+  "version": "1.0.0",
+  "description": "An Electron application with React and TypeScript",
+  "main": "./out/main/index.js",
+  "author": "example.com",
+  "homepage": "https://electron-vite.org",
+  "type": "module",
+  "scripts": {
+    "format": "prettier --write .",
+    "lint": "eslint . --ext .js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "start": "electron-vite preview",
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "postinstall": "electron-builder install-app-deps",
+    "build:unpack": "npm run build && electron-builder --dir",
+    "build:win": "npm run build && electron-builder --win",
+    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:linux": "electron-vite build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@radix-ui/react-switch": "^1.1.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "electron-store": "^10.0.0",
+    "electron-updater": "^6.1.7",
+    "lucide-react": "^0.468.0",
+    "tailwind-merge": "^2.5.5",
+    "tailwindcss-animate": "^1.0.7"
+  },
+  "devDependencies": {
+    "@electron-toolkit/eslint-config-prettier": "^2.0.0",
+    "@electron-toolkit/eslint-config-ts": "^2.0.0",
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@types/node": "^20.14.8",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "electron": "^31.0.2",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.3",
+    "postcss": "^8.4.49",
+    "prettier": "^3.3.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.5.2",
+    "vite": "^5.3.1"
+  }
+}
+--------------------------------
+./tsconfig.json
+--------------------------------
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "strict": true,
+    "jsx": "react",
+    "moduleResolution": "node",
+    "isolatedModules": true,
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src",
+    "main",
+    "preload",
+    "renderer",
+    "preload/index.d.ts"
+  ],
+  "files": [],
+  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }]
+}
+--------------------------------
+THE PROJECT IS FORMATTED LIKE SO:
+.
+├──src
+│  ├──main
+│  │  ├──index.ts
+│  │  └──...
+│  ├──preload
+│  │  ├──index.ts
+│  │  └──...
+│  └──renderer    # with vue, react, etc.
+│     ├──src
+│     ├──index.html
+│     └──...
+├──electron.vite.config.ts
+├──package.json
+└──...
+
