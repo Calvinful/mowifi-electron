@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Switch } from '@radix-ui/react-switch'
+//import Store from 'electron-store'
+//import { app, ipcMain, BrowserWindow } from 'electron'
 
 interface SettingsState {
   theme: string
@@ -16,9 +18,9 @@ const Settings = (): JSX.Element => {
 
   useEffect(() => {
     const loadSettings = async (): Promise<void> => {
-      const theme = (await window.store.get('theme')) as string
-      const notifications = (await window.store.get('notifications')) as boolean
-      const autoLaunch = (await window.store.get('autoLaunch')) as boolean
+      const theme = (await window['store'].get('theme')) as string
+      const notifications = (await window['store'].get('notifications')) as boolean
+      const autoLaunch = (await window['store'].get('autoLaunch')) as boolean
       setSettings({ theme, notifications, autoLaunch })
     }
     loadSettings()
@@ -28,7 +30,7 @@ const Settings = (): JSX.Element => {
     key: keyof SettingsState,
     value: string | boolean
   ): Promise<void> => {
-    await window.store.set(key, value)
+    await window['store'].set(key, value)
     setSettings((prev) => ({ ...prev, [key]: value }))
   }
 
